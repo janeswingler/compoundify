@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>compoundify</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="login-page">
+  <div class="login-card">
+    <div class="login-card__header">
+      <div class="login-card__logo" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 9l10-4 10 4-10 4-10-4z"/>
+          <path d="M6 11v4c0 1.8 2.7 3 6 3s6-1.2 6-3v-4"/>
+          <path d="M22 9v4"/>
+        </svg>
+      </div>
+      <h1><span class="gradient-text">compoundify</span></h1>
+    </div>
+    <p>AI-powered STEM study manager</p>
+    <form id="participant-form">
+      <div class="field">
+        <label for="participantID">Participant ID</label>
+        <input type="text" id="participantID" name="participantID" placeholder="e.g. 42" required autocomplete="off" />
+      </div>
+      <button type="submit" class="btn-primary">Start Session</button>
+    </form>
+  </div>
+  <script>
+    document.getElementById('participant-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      const participantID = document.getElementById('participantID').value.trim();
+      localStorage.setItem('participantID', participantID);
+      window.location.href = `/app.html?participantID=${encodeURIComponent(participantID)}`;
+    });
+  </script>
+</body>
+</html>
