@@ -172,6 +172,7 @@ function showMathPanel(show) {
 }
 
 mathToggleBtn.addEventListener('click', () => {
+  logEvent('click', 'Math Panel Toggle');
   showMathPanel(mathPanel.style.display === 'none');
 });
 
@@ -193,22 +194,108 @@ function addMathChip(latex) {
 }
 
 mathInsertBtn.addEventListener('click', () => {
-  const latex = mathField.value;
+  logEvent('click', 'Math Insert');
+  const latex = lastResultLatex || mathField.value;
   if (!latex) return;
   addMathChip(latex);
   mathField.value = '';
+  mathResultEl.style.display = 'none';
+  lastResultLatex = '';
+  mathField.focus();
+});
+
+document.getElementById('math-clear-btn').addEventListener('click', () => {
+  logEvent('click', 'Math Clear');
+  mathField.value = '';
+  mathResultEl.style.display = 'none';
+  lastResultLatex = '';
+  mathField.focus();
+});
+
+// One-shot guard: suppress the next `input`-triggered clear (used after Calculate runs,
+// since MathLive may fire an input event after our keydown handler returns).
+let suppressInputClear = false;
+
+// Enter triggers Calculate, but only when the math-field is focused — otherwise it would
+// conflict with the chat textarea's Enter-to-send.
+mathField.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    e.stopPropagation();
+    logEvent('keypress', 'Math Field Return');
+    suppressInputClear = true;
+    document.getElementById('math-calc-btn').click();
+  }
+});
+
+// Option/Alt + C and Option/Alt + I are global shortcuts (work from anywhere in the UI).
+// We listen at the window level on capture so MathLive's internal handler doesn't see
+// the keystroke. We still belt-and-suspender with a setTimeout sweep in case Mac OS
+// inserts a dead-key character (ˆ / ç) that bypasses preventDefault.
+function sweepStrayDeadKey() {
+  const v = mathField.value;
+  if (v === 'ˆ' || v === 'ç' || v === '˙' || v === 'ø') mathField.value = '';
+}
+window.addEventListener('keydown', (e) => {
+  if (!e.altKey) return;
+  if (e.code === 'KeyC') {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    logEvent('keypress', 'Math Option+C');
+    document.getElementById('math-clear-btn').click();
+    setTimeout(sweepStrayDeadKey, 0);
+  } else if (e.code === 'KeyI') {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    logEvent('keypress', 'Math Option+I');
+    mathInsertBtn.click();
+    setTimeout(sweepStrayDeadKey, 0);
+  }
+}, { capture: true });
+
+// Clicking anywhere in the math panel (background, padding, label area) focuses the
+// math-field so the user can start typing immediately. Buttons and chips are excluded.
+mathPanel.addEventListener('mousedown', (e) => {
+  if (e.target.closest('button, .math-chip, .math-symbols')) return;
+  if (e.target === mathField) return;
   mathField.focus();
 });
 
 function extractBraces(str, start) {
+  if (str[start] !== '{') return { content: '', end: start };
   let depth = 0, i = start, content = '';
   while (i < str.length) {
-    if (str[i] === '{') depth++;
-    else if (str[i] === '}') { depth--; if (depth === 0) return { content, end: i }; }
-    if (depth > 0) content += str[i];
+    const ch = str[i];
+    if (ch === '{') {
+      if (depth > 0) content += ch;
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0) return { content, end: i };
+      content += ch;
+    } else if (depth > 0) {
+      content += ch;
+    }
     i++;
   }
   return { content, end: i };
+}
+
+// Extract a single argument after a LaTeX control word: braced group, a single backslash
+// command, or a single character. Whitespace following a control word is a separator, not
+// part of the argument. Returns { content, end } where `end` is the index of the last
+// consumed character.
+function extractArg(str, start) {
+  let i = start;
+  while (i < str.length && /\s/.test(str[i])) i++;
+  if (i >= str.length) return { content: '', end: i - 1 };
+  if (str[i] === '{') return extractBraces(str, i);
+  if (str[i] === '\\') {
+    let j = i + 1;
+    while (j < str.length && /[a-zA-Z]/.test(str[j])) j++;
+    return { content: str.slice(i, j), end: j - 1 };
+  }
+  return { content: str[i], end: i };
 }
 
 function latexToMathJs(latex) {
@@ -219,42 +306,57 @@ function latexToMathJs(latex) {
       let j = i + 1;
       while (j < s.length && /[a-zA-Z]/.test(s[j])) j++;
       const cmd = s.slice(i + 1, j);
+
+      if (cmd === '') { i = j; continue; }
+
       if (cmd === 'frac') {
-        const num = extractBraces(s, j); j = num.end + 1;
-        const den = extractBraces(s, j); j = den.end + 1;
-        result += `((${latexToMathJs(num.content)})/(${latexToMathJs(den.content)}))`;
+        const num = extractArg(s, j); j = num.end + 1;
+        const den = extractArg(s, j); j = den.end + 1;
+        const numMath = latexToMathJs(num.content);
+        const denMath = latexToMathJs(den.content);
+        if (!numMath.trim() || !denMath.trim()) throw new Error('Fill in placeholder');
+        result += `((${numMath})/(${denMath}))`;
         i = j;
       } else if (cmd === 'sqrt') {
         if (s[j] === '[') {
           const nEnd = s.indexOf(']', j);
           const n = s.slice(j + 1, nEnd); j = nEnd + 1;
-          const arg = extractBraces(s, j); j = arg.end + 1;
-          result += `nthRoot(${latexToMathJs(arg.content)},${latexToMathJs(n)})`; i = j;
+          const arg = extractArg(s, j); j = arg.end + 1;
+          const argMath = latexToMathJs(arg.content);
+          const nMath   = latexToMathJs(n);
+          if (!argMath.trim() || !nMath.trim()) throw new Error('Fill in placeholder');
+          result += `nthRoot(${argMath},${nMath})`; i = j;
         } else {
-          const arg = extractBraces(s, j); j = arg.end + 1;
-          result += `sqrt(${latexToMathJs(arg.content)})`; i = j;
+          const arg = extractArg(s, j); j = arg.end + 1;
+          const argMath = latexToMathJs(arg.content);
+          if (!argMath.trim()) throw new Error('Fill in placeholder');
+          result += `sqrt(${argMath})`; i = j;
         }
+      } else if (cmd === 'placeholder') {
+        if (s[j] === '[') { const close = s.indexOf(']', j); j = close === -1 ? j + 1 : close + 1; }
+        if (s[j] === '{') { const arg = extractBraces(s, j); j = arg.end + 1; }
+        i = j;
       } else if (cmd === 'times' || cmd === 'cdot') { result += '*'; i = j; }
-      else if (cmd === 'div')   { result += '/';      i = j; }
-      else if (cmd === 'pi')    { result += 'pi';     i = j; }
-      else if (cmd === 'ln')    { result += 'log';    i = j; }
-      else if (cmd === 'log')   { result += 'log10';  i = j; }
-      else if (cmd === 'infty') { result += 'Infinity'; i = j; }
-      else if (cmd === 'pm')    { result += '+';      i = j; }
-      else if (cmd === 'approx'){ result += '~=';     i = j; }
-      else if (cmd === 'le' || cmd === 'leq') { result += '<='; i = j; }
-      else if (cmd === 'ge' || cmd === 'geq') { result += '>='; i = j; }
-      else if (cmd === 'ne')    { result += '!=';     i = j; }
+      else if (cmd === 'div') { result += '/';  i = j; }
       else if (cmd === 'left' || cmd === 'right') { i = j; }
-      else { i = j; }
+      else { throw new Error('Unsupported: \\' + cmd); }
     } else if (s[i] === '^') {
+      if (!result.trim()) throw new Error('Fill in placeholder');
       if (s[i + 1] === '{') {
         const arg = extractBraces(s, i + 1);
-        result += `^(${latexToMathJs(arg.content)})`; i = arg.end + 1;
+        const argMath = latexToMathJs(arg.content);
+        if (!argMath.trim()) throw new Error('Fill in placeholder');
+        result += `^(${argMath})`; i = arg.end + 1;
       } else { result += '^'; i++; }
     } else if (s[i] === '_') {
-      if (s[i + 1] === '{') { const arg = extractBraces(s, i + 1); i = arg.end + 1; }
-      else { i += 2; }
+      if (s[i + 1] === '{') {
+        const arg = extractBraces(s, i + 1);
+        i = arg.end + 1;
+      } else if (i + 1 < s.length) {
+        i += 2;
+      } else {
+        i += 1;
+      }
     } else if (s[i] === '{') {
       const arg = extractBraces(s, i);
       result += `(${latexToMathJs(arg.content)})`; i = arg.end + 1;
@@ -267,55 +369,147 @@ function latexToMathJs(latex) {
 
 const mathResultEl      = document.getElementById('math-result');
 const mathResultValue   = document.getElementById('math-result-value');
-const mathResultInsert  = document.getElementById('math-result-insert-btn');
 let lastResultLatex = '';
 
 document.getElementById('math-calc-btn').addEventListener('click', () => {
+  logEvent('click', 'Math Calculate');
   const latex = mathField.value;
   if (!latex) return;
   try {
     const expr = latexToMathJs(latex);
+    if (!expr.trim()) throw new Error('Fill in placeholder');
+
     const raw = math.evaluate(expr);
     const formatted = math.format(raw, { precision: 10 });
 
-    // Convert result back to LaTeX for nice rendering
-    const isNum = typeof raw === 'number' || (raw && raw.isNumeric);
-    lastResultLatex = formatted;
+    let latexOut;
+    try {
+      latexOut = (raw && typeof raw.toTex === 'function')
+        ? raw.toTex({ precision: 10 })
+        : math.parse(formatted).toTex({ parenthesis: 'auto' });
+    } catch (_) {
+      latexOut = String(formatted);
+    }
 
-    mathResultValue.innerHTML = `\\(${formatted}\\)`;
+    lastResultLatex = latexOut;
+    mathResultValue.innerHTML = `\\(${latexOut}\\)`;
     mathResultEl.style.display = 'flex';
     MathJax.typesetPromise([mathResultValue]);
   } catch (e) {
-    mathResultValue.textContent = 'Cannot evaluate';
+    mathResultValue.textContent = (e && e.message) ? e.message : 'Cannot evaluate';
     mathResultEl.style.display = 'flex';
     lastResultLatex = '';
   }
 });
 
-mathResultInsert.addEventListener('click', () => {
-  if (!lastResultLatex) return;
-  addMathChip(lastResultLatex);
+// Clear result when field changes (unless a Calculate just ran).
+mathField.addEventListener('input', () => {
+  if (suppressInputClear) {
+    suppressInputClear = false;
+    return;
+  }
   mathResultEl.style.display = 'none';
-  mathField.value = '';
   lastResultLatex = '';
 });
 
-// Clear result when field changes
-mathField.addEventListener('input', () => {
-  mathResultEl.style.display = 'none';
-  lastResultLatex = '';
-});
+// Find the last "atom" at the end of a LaTeX string: a balanced (...) group, a
+// balanced \cmd{...} block, or a digit/letter run. Returns the substring, or '' if
+// the string ends with whitespace or an operator.
+function findLastAtom(str) {
+  if (!str) return '';
+  let i = str.length;
+  while (i > 0 && /\s/.test(str[i - 1])) i--;
+  if (i === 0) return '';
+  const last = str[i - 1];
+  if (last === ')') {
+    let depth = 1, k = i - 1;
+    while (k > 0 && depth > 0) {
+      k--;
+      if (str[k] === ')') depth++;
+      else if (str[k] === '(') depth--;
+    }
+    return str.slice(k, i);
+  }
+  if (last === '}') {
+    let depth = 1, k = i - 1;
+    while (k > 0 && depth > 0) {
+      k--;
+      if (str[k] === '}') depth++;
+      else if (str[k] === '{') depth--;
+    }
+    // Pull in a leading \command if present (so \sqrt{2} becomes one atom, not just {2}).
+    let cmdEnd = k;
+    let cmdStart = cmdEnd;
+    while (cmdStart > 0 && /[a-zA-Z]/.test(str[cmdStart - 1])) cmdStart--;
+    if (cmdStart > 0 && str[cmdStart - 1] === '\\') cmdStart--;
+    return str.slice(cmdStart, i);
+  }
+  if (/[0-9a-zA-Z.]/.test(last)) {
+    let k = i - 1;
+    while (k > 0 && /[0-9a-zA-Z.]/.test(str[k - 1])) k--;
+    return str.slice(k, i);
+  }
+  return '';
+}
+
+// True if there's a real value (number / identifier / closing-grouped expression) on
+// the left of the cursor. Heuristic: cursor sits at the end and the value's tail is
+// not whitespace or an operator.
+function hasValueOnLeft() {
+  return findLastAtom(mathField.value) !== '';
+}
+
+// Insert a button payload. If the payload has a `#0` slot:
+//   - With a value on the left, splice that value into the `#0` position.
+//   - With nothing usable on the left, substitute `#0` with `#?` so MathLive renders
+//     a real placeholder box at that position with the cursor in it.
+function symButtonInsert(payload) {
+  if (!payload) return;
+  if (!payload.includes('#0')) {
+    mathField.insert(payload);
+    return;
+  }
+  const value = mathField.value;
+  const atom = findLastAtom(value);
+  if (atom) {
+    const before = value.slice(0, value.length - atom.length);
+    mathField.value = before;
+    mathField.executeCommand('moveToMathFieldEnd');
+    mathField.insert(payload.replace(/#0/g, atom));
+  } else {
+    mathField.insert(payload.replace(/#0/g, '#?'));
+  }
+}
 
 document.querySelectorAll('.sym-btn').forEach(btn => {
+  if (btn.id === 'math-negate-btn') return;
   btn.addEventListener('mousedown', e => {
     e.preventDefault();
+    logEvent('click', 'Math Symbol: ' + btn.textContent.trim());
     if (btn.dataset.cmd) {
       mathField.executeCommand(btn.dataset.cmd);
     } else {
-      mathField.insert(btn.dataset.latex);
+      symButtonInsert(btn.dataset.latex);
     }
     mathField.focus();
   });
+});
+
+// Unary minus: place `-` immediately in front of the value to the left. If nothing
+// useful is to the left, just insert a `-` at the cursor.
+document.getElementById('math-negate-btn').addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  logEvent('click', 'Math Symbol: (-)');
+  const value = mathField.value;
+  const atom = findLastAtom(value);
+  if (atom) {
+    const before = value.slice(0, value.length - atom.length);
+    mathField.value = before + '-' + atom;
+    mathField.executeCommand('moveToMathFieldEnd');
+  } else {
+    mathField.insert('-');
+  }
+  mathField.focus();
 });
 
 sendBtn.addEventListener('click', () => {
