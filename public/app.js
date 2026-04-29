@@ -178,7 +178,20 @@ mathToggleBtn.addEventListener('click', () => {
 
 const CLOSE_SVG = `<svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="1" y1="1" x2="7" y2="7"/><line x1="7" y1="1" x2="1" y2="7"/></svg>`;
 
+// Strip an unpaired trailing backslash. MathJax otherwise renders it as a literal
+// "\" glyph in the result band or chip — even paired backslashes (\\) pass through
+// fine, so we only trim when the count is odd.
+function sanitizeLatex(s) {
+  if (!s) return '';
+  s = String(s);
+  const m = s.match(/\\+$/);
+  if (m && m[0].length % 2 === 1) s = s.slice(0, -1);
+  return s;
+}
+
 function addMathChip(latex) {
+  latex = sanitizeLatex(latex);
+  if (!latex) return;
   const chipsEl = document.getElementById('math-chips');
   chipsEl.style.display = 'flex';
   const chip = document.createElement('span');
@@ -390,6 +403,7 @@ document.getElementById('math-calc-btn').addEventListener('click', () => {
     } catch (_) {
       latexOut = String(formatted);
     }
+    latexOut = sanitizeLatex(latexOut);
 
     lastResultLatex = latexOut;
     mathResultValue.innerHTML = `\\(${latexOut}\\)`;
@@ -412,44 +426,103 @@ mathField.addEventListener('input', () => {
   lastResultLatex = '';
 });
 
-// Find the last "atom" at the end of a LaTeX string: a balanced (...) group, a
-// balanced \cmd{...} block, or a digit/letter run. Returns the substring, or '' if
-// the string ends with whitespace or an operator.
+// Find the last "atom" at the end of a LaTeX string: a balanced (...) group
+// (with any \left / \right wrappers MathLive serialised), a balanced multi-arg
+// \cmd{...}{...} block, a base value carrying a ^{...} / _{...} script, or a
+// digit/letter run. Returns the substring, or '' if the string ends with
+// whitespace or an operator.
+//
+// The walk has to be tight: any time `before = value.slice(0, value.length - atom.length)`
+// produces malformed LaTeX (orphaned \left, half a \placeholder, an unmatched
+// {), MathLive re-renders the literal command name as text and the user sees raw
+// LaTeX. So we must always return an atom whose removal leaves valid LaTeX.
 function findLastAtom(str) {
+  function start(end) {
+    while (end > 0 && /\s/.test(str[end - 1])) end--;
+    if (end === 0) return 0;
+    const last = str[end - 1];
+
+    if (last === ')') {
+      let depth = 1, k = end - 1;
+      while (k > 0 && depth > 0) {
+        k--;
+        if (str[k] === ')') depth++;
+        else if (str[k] === '(') depth--;
+      }
+      // Pull in a leading \left (with optional whitespace before the matched `(`)
+      // so the atom owns its \right counterpart inside the slice.
+      let p = k;
+      while (p > 0 && /\s/.test(str[p - 1])) p--;
+      if (p >= 5 && str.slice(p - 5, p) === '\\left') return p - 5;
+      return k;
+    }
+
+    if (last === '}' || last === ']') {
+      const closing = last;
+      const opening = closing === '}' ? '{' : '[';
+      let depth = 1, k = end - 1;
+      while (k > 0 && depth > 0) {
+        k--;
+        if (str[k] === closing) depth++;
+        else if (str[k] === opening) depth--;
+      }
+      // Walk back through any preceding {...} / [...] argument groups, so
+      // multi-arg commands like \frac{a}{b} and \sqrt[n]{x} are treated as one
+      // atom rather than just their final brace group.
+      while (k > 0) {
+        let q = k;
+        while (q > 0 && /\s/.test(str[q - 1])) q--;
+        if (q === 0) break;
+        const c2 = str[q - 1];
+        if (c2 !== '}' && c2 !== ']') break;
+        const o2 = c2 === '}' ? '{' : '[';
+        let d2 = 1, kk = q - 1;
+        while (kk > 0 && d2 > 0) {
+          kk--;
+          if (str[kk] === c2) d2++;
+          else if (str[kk] === o2) d2--;
+        }
+        k = kk;
+      }
+      // Pull in any leading \command letters (so \sqrt{2} becomes one atom).
+      let cmdStart = k;
+      while (cmdStart > 0 && /[a-zA-Z]/.test(str[cmdStart - 1])) cmdStart--;
+      if (cmdStart > 0 && str[cmdStart - 1] === '\\') return cmdStart - 1;
+      // If the brace group is a superscript / subscript, recurse so the base
+      // value comes along (5^{2} → atom is 5^{2}, not just {2}). Without this,
+      // before = "5^{" would be unbalanced and MathLive renders it as text.
+      if (k > 0 && (str[k - 1] === '^' || str[k - 1] === '_')) {
+        return start(k - 1);
+      }
+      return k;
+    }
+
+    if (/[0-9a-zA-Z.]/.test(last)) {
+      let k = end - 1;
+      while (k > 0 && /[0-9a-zA-Z.]/.test(str[k - 1])) k--;
+      // If the run is preceded by `\`, it's a control word (\cdot, \div, \times,
+      // …). Removing it would leave `before` ending with an orphan `\`, which
+      // MathLive then merges with whatever insert lands next or renders as raw
+      // text. Treat the control word as an operator — no atom.
+      if (k > 0 && str[k - 1] === '\\') return end;
+      // If the run sits on top of a script marker (5^2, x_1 with no braces),
+      // recurse so the base value travels with it.
+      if (k > 0 && (str[k - 1] === '^' || str[k - 1] === '_')) {
+        return start(k - 1);
+      }
+      return k;
+    }
+
+    return end; // operator / unrecognised — no atom
+  }
+
   if (!str) return '';
   let i = str.length;
   while (i > 0 && /\s/.test(str[i - 1])) i--;
   if (i === 0) return '';
-  const last = str[i - 1];
-  if (last === ')') {
-    let depth = 1, k = i - 1;
-    while (k > 0 && depth > 0) {
-      k--;
-      if (str[k] === ')') depth++;
-      else if (str[k] === '(') depth--;
-    }
-    return str.slice(k, i);
-  }
-  if (last === '}') {
-    let depth = 1, k = i - 1;
-    while (k > 0 && depth > 0) {
-      k--;
-      if (str[k] === '}') depth++;
-      else if (str[k] === '{') depth--;
-    }
-    // Pull in a leading \command if present (so \sqrt{2} becomes one atom, not just {2}).
-    let cmdEnd = k;
-    let cmdStart = cmdEnd;
-    while (cmdStart > 0 && /[a-zA-Z]/.test(str[cmdStart - 1])) cmdStart--;
-    if (cmdStart > 0 && str[cmdStart - 1] === '\\') cmdStart--;
-    return str.slice(cmdStart, i);
-  }
-  if (/[0-9a-zA-Z.]/.test(last)) {
-    let k = i - 1;
-    while (k > 0 && /[0-9a-zA-Z.]/.test(str[k - 1])) k--;
-    return str.slice(k, i);
-  }
-  return '';
+  const k = start(i);
+  if (k === i) return '';
+  return str.slice(k, i);
 }
 
 // True if there's a real value (number / identifier / closing-grouped expression) on
