@@ -12,6 +12,22 @@ if (systemID) localStorage.setItem('systemID', systemID);
 document.getElementById('topbar-pid').textContent =
   systemID ? `ID: ${participantID} · System ${systemID}` : `ID: ${participantID}`;
 
+const SESSION_UNLOCK_SECONDS = 20 * 60;
+const timerEl = document.getElementById('topbar-timer');
+const returnBtn = document.getElementById('topbar-return');
+const sessionStart = Date.now();
+function updateSessionTimer() {
+  const elapsed = Math.floor((Date.now() - sessionStart) / 1000);
+  const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
+  const ss = String(elapsed % 60).padStart(2, '0');
+  timerEl.textContent = `${mm}:${ss}`;
+  if (elapsed >= SESSION_UNLOCK_SECONDS && returnBtn.disabled) {
+    returnBtn.disabled = false;
+  }
+}
+updateSessionTimer();
+setInterval(updateSessionTimer, 1000);
+
 // Persisted state keys
 const TOPICS_KEY   = `cai_topics_${participantID}`;
 const FORMULAS_KEY = `cai_formulas_${participantID}`;
