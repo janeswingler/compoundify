@@ -1,12 +1,16 @@
 const params = new URLSearchParams(window.location.search);
-const participantID = params.get('participantID') || localStorage.getItem('participantID');
 
+let participantID = params.get('participantID') || localStorage.getItem('participantID');
 if (!participantID) {
-  alert('No participant ID found.');
-  window.location.href = '/';
+  participantID = (crypto.randomUUID && crypto.randomUUID()) || `p_${Date.now()}`;
 }
+localStorage.setItem('participantID', participantID);
 
-document.getElementById('topbar-pid').textContent = `ID: ${participantID}`;
+const systemID = params.get('systemID') || localStorage.getItem('systemID') || '';
+if (systemID) localStorage.setItem('systemID', systemID);
+
+document.getElementById('topbar-pid').textContent =
+  systemID ? `ID: ${participantID} · System ${systemID}` : `ID: ${participantID}`;
 
 // Persisted state keys
 const TOPICS_KEY   = `cai_topics_${participantID}`;
