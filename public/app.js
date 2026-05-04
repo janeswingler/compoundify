@@ -12,7 +12,7 @@ if (systemID) localStorage.setItem('systemID', systemID);
 document.getElementById('topbar-pid').textContent =
   systemID ? `ID: ${participantID} · System ${systemID}` : `ID: ${participantID}`;
 
-const SESSION_UNLOCK_SECONDS = 20 * 60;
+const SESSION_UNLOCK_SECONDS = 10;
 const timerEl = document.getElementById('topbar-timer');
 const returnBtn = document.getElementById('topbar-return');
 const sessionStart = Date.now();
@@ -27,6 +27,12 @@ function updateSessionTimer() {
 }
 updateSessionTimer();
 setInterval(updateSessionTimer, 1000);
+
+// Return button: navigate to study-workflow page once enabled
+returnBtn.addEventListener('click', () => {
+  const returnUrl = `https://ai-chatbot-fv7e.onrender.com/study-workflow.html?participantID=${encodeURIComponent(participantID)}&systemID=${encodeURIComponent(systemID)}`;
+  window.location.href = returnUrl;
+});
 
 // Persisted state keys
 const TOPICS_KEY   = `cai_topics_${participantID}`;
