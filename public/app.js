@@ -9,9 +9,6 @@ localStorage.setItem('participantID', participantID);
 const systemID = params.get('systemID') || localStorage.getItem('systemID') || '';
 if (systemID) localStorage.setItem('systemID', systemID);
 
-document.getElementById('topbar-pid').textContent =
-  systemID ? `ID: ${participantID} · System ${systemID}` : `ID: ${participantID}`;
-
 const SESSION_UNLOCK_SECONDS = 10;
 const timerEl = document.getElementById('topbar-timer');
 const returnBtn = document.getElementById('topbar-return');
