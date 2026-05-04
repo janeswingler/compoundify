@@ -66,6 +66,8 @@ app.post('/chat', async (req, res) => {
         input: userInput,
         message,
         participantID,
+        systemID,
+        sessionID,
         currentTopic,
         mode,        // 'normal' | 'quiz_eval'
         retrievalMethod,
@@ -122,6 +124,8 @@ app.post('/chat', async (req, res) => {
 
     const interaction = new Interaction({
       participantID,
+      systemID: systemID || null,
+      sessionID: sessionID || null,
       userInput: userMessage,
       botResponse,
       currentTopic: currentTopic || null,
@@ -368,10 +372,12 @@ Respond with ONLY a JSON object (no markdown):
 
 app.post('/notes', async (req, res) => {
   try {
-    const { participantID, title, content, topic, isFormula, messageRef, isHighlight } = req.body;
+    const { participantID, systemID, sessionID, title, content, topic, isFormula, messageRef, isHighlight } = req.body;
     if (!participantID || !content) return res.status(400).json({ error: 'Missing fields' });
     const note = new Note({
       participantID,
+      systemID: systemID || null,
+      sessionID: sessionID || null,
       title: (title || 'Untitled').trim() || 'Untitled',
       content,
       topic: topic || null,
@@ -459,9 +465,9 @@ app.get('/documents', async (req, res) => {
 });
 
 app.post('/log-event', async (req, res) => {
-  const { participantID, eventType, elementName, timestamp } = req.body;
+  const { participantID, systemID, sessionID, eventType, elementName, timestamp } = req.body;
   try {
-    const event = new EventLog({ participantID, eventType, elementName, timestamp });
+    const event = new EventLog({ participantID, systemID: systemID || null, sessionID: sessionID || null, eventType, elementName, timestamp });
     await event.save();
     res.status(200).send('ok');
   } catch (err) {

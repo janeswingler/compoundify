@@ -9,6 +9,12 @@ localStorage.setItem('participantID', participantID);
 const systemID = params.get('systemID') || localStorage.getItem('systemID') || '';
 if (systemID) localStorage.setItem('systemID', systemID);
 
+let sessionID = params.get('sessionID') || localStorage.getItem('sessionID');
+if (!sessionID) {
+  sessionID = (crypto.randomUUID && crypto.randomUUID()) || `s_${Date.now()}`;
+}
+localStorage.setItem('sessionID', sessionID);
+
 const SESSION_UNLOCK_SECONDS = 10;
 const timerEl = document.getElementById('topbar-timer');
 const returnBtn = document.getElementById('topbar-return');
@@ -27,7 +33,7 @@ setInterval(updateSessionTimer, 1000);
 
 // Return button: navigate to study-workflow page once enabled
 returnBtn.addEventListener('click', () => {
-  const returnUrl = `https://ai-chatbot-fv7e.onrender.com/study-workflow.html?participantID=${encodeURIComponent(participantID)}&systemID=${encodeURIComponent(systemID)}`;
+  const returnUrl = `https://ai-chatbot-fv7e.onrender.com/study-workflow.html?participantID=${encodeURIComponent(participantID)}&systemID=${encodeURIComponent(systemID)}&sessionID=${encodeURIComponent(sessionID)}`;
   window.location.href = returnUrl;
 });
 
@@ -646,6 +652,8 @@ async function handleSend() {
         history: conversationHistory.slice(-12),
         input: message,
         participantID,
+        systemID,
+        sessionID,
         currentTopic,
         mode,
         retrievalMethod: 'semantic',
@@ -1026,6 +1034,8 @@ function selectTopic(topic) {
       history: conversationHistory.slice(-8),
       input: msg,
       participantID,
+      systemID,
+      sessionID,
       currentTopic: topic.name,
       mode: 'normal',
       retrievalMethod: 'semantic'
@@ -1071,6 +1081,8 @@ async function saveNote(content, isFormula = false, messageRef = null, title = '
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         participantID,
+        systemID,
+        sessionID,
         title,
         content,
         topic: currentTopic,
@@ -1830,7 +1842,7 @@ function logEvent(type, element) {
   fetch('/log-event', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ participantID, eventType: type, elementName: element, timestamp: new Date() })
+    body: JSON.stringify({ participantID, systemID, sessionID, eventType: type, elementName: element, timestamp: new Date() })
   }).catch(() => {});
 }
 
