@@ -1955,7 +1955,7 @@ async function init() {
       });
     } else {
       // First visit — welcome message
-      appendBotMessage('Hi, how can I help you today?');
+      appendBotMessage('Hi, welcome to Compoundify!\n\n- Generate a learning plan on the left, or add topics yourself.\n- Click on a topic to get started!');
     }
   } catch (err) {
     console.error(err);
