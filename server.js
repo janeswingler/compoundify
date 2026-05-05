@@ -209,6 +209,92 @@ function parseTopicsPayload(rawText, subject) {
   return fallbackTopicsForSubject(subject);
 }
 
+function fallbackPracticeProblem(topic) {
+  return {
+    problem: `Work through ${topic} step by step.`,
+    steps: [
+      {
+        number: 1,
+        instruction: 'Write down the given information in your own words.',
+        answer: 'A clear restatement of the problem information.',
+        hint: 'Identify the values and quantities mentioned in the problem.'
+      },
+      {
+        number: 2,
+        instruction: 'Choose the formula or strategy you will use.',
+        answer: 'The appropriate formula or method for the topic.',
+        hint: 'Think about what relationship or rule applies here.'
+      },
+      {
+        number: 3,
+        instruction: 'Carry out the calculation or reasoning.',
+        answer: 'The correct working and intermediate result.',
+        hint: 'Show the key steps clearly.'
+      },
+      {
+        number: 4,
+        instruction: 'State the final answer and check it makes sense.',
+        answer: 'A final answer with a quick reasonableness check.',
+        hint: 'Make sure your answer matches the question being asked.'
+      }
+    ]
+  };
+}
+
+function parsePracticeProblemPayload(rawText, topic) {
+  const cleaned = String(rawText || '').replace(/```json|```/g, '').trim();
+
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const steps = Array.isArray(parsed.steps)
+        ? parsed.steps
+            .filter(step => step && typeof step === 'object')
+            .map((step, index) => ({
+              number: Number.isFinite(Number(step.number)) ? Number(step.number) : index + 1,
+              instruction: String(step.instruction || '').trim() || `Step ${index + 1}`,
+              answer: String(step.answer || '').trim() || 'Expected answer',
+              hint: step.hint ? String(step.hint).trim() : ''
+            }))
+        : [];
+
+      if (steps.length > 0 && parsed.problem) {
+        return {
+          problem: String(parsed.problem).trim(),
+          steps
+        };
+      }
+    }
+  } catch (_) {
+    // Fall through to fallback scaffold below.
+  }
+
+  return fallbackPracticeProblem(topic);
+}
+
+function normalizeCurrencyLikeAnswer(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\b(r|zar|rand|usd|eur|gbp|£|€|\$)\s*/g, '')
+    .replace(/[^\d.,-]+/g, '')
+    .replace(/,/g, '')
+    .trim();
+}
+
+function isCurrencyEquivalentAnswer(expectedAnswer, studentAnswer) {
+  const expectedNormalized = normalizeCurrencyLikeAnswer(expectedAnswer);
+  const studentNormalized = normalizeCurrencyLikeAnswer(studentAnswer);
+
+  if (!expectedNormalized || !studentNormalized) return false;
+
+  const expectedNumeric = Number(expectedNormalized);
+  const studentNumeric = Number(studentNormalized);
+
+  if (!Number.isFinite(expectedNumeric) || !Number.isFinite(studentNumeric)) return false;
+
+  return expectedNumeric === studentNumeric;
+}
+
 app.post('/generate-topics', async (req, res) => {
   try {
     const { subject, participantID } = req.body;
@@ -287,7 +373,7 @@ No markdown, no extra text.`;
 
 app.post('/practice-problem', async (req, res) => {
   try {
-    const { topic, participantID, history = [] } = req.body;
+    const { topic, participantID, history = [], previousProblem = null } = req.body;
     if (!topic) return res.status(400).json({ error: 'Topic is required' });
 
     // Pull relevant chunks for the topic
@@ -298,9 +384,17 @@ app.post('/practice-problem', async (req, res) => {
 
     const contextSection = contextText ? `\nContext:\n${contextText}` : '';
 
-    const prompt = `Generate a practice problem for a student learning about "${topic}".${contextSection}
+    const previousProblemSection = previousProblem && previousProblem.problem
+      ? `\nPrevious problem to avoid repeating:\n${JSON.stringify(previousProblem, null, 2)}`
+      : '';
+
+    const prompt = `Generate a practice problem for a student learning about "${topic}".${contextSection}${previousProblemSection}
+
+If a previous problem is provided, do not reuse the same scenario, numbers, wording, or step structure. Create a meaningfully different practice problem that still teaches the same topic.
 
 The problem should have 4-5 clear steps that build on each other. For each step, specify what the student should do and what counts as a correct answer.
+
+  Write each "answer" field as a student-friendly answer example, not as instructions about what the student should do. Use direct, plain language that sounds like something a student could say.
 
 Return ONLY a JSON object with this exact shape (no markdown, no extra text):
 {
@@ -322,13 +416,23 @@ Return ONLY a JSON object with this exact shape (no markdown, no extra text):
     });
 
     const raw = response.choices[0].message.content.trim();
-    const cleaned = raw.replace(/```json|```/g, '').trim();
-    const problem = JSON.parse(cleaned);
+    let problem = parsePracticeProblemPayload(raw, topic);
+
+    if (previousProblem && previousProblem.problem && problem.problem === previousProblem.problem) {
+      const retryPrompt = `${prompt}\n\nThe first attempt repeated the previous problem too closely. Try again with a different scenario and different step wording.`;
+      const retryResponse = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: retryPrompt }],
+        max_tokens: 500,
+      });
+      const retryRaw = retryResponse.choices[0].message.content.trim();
+      problem = parsePracticeProblemPayload(retryRaw, topic);
+    }
 
     res.json(problem);
   } catch (err) {
     console.error('Practice problem error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.json(fallbackPracticeProblem(req.body?.topic || 'the topic'));
   }
 });
 
@@ -336,14 +440,22 @@ app.post('/evaluate-step', async (req, res) => {
   try {
     const { topic, stepNumber, instruction, expectedAnswer, studentAnswer, hint, participantID } = req.body;
 
+    if (isCurrencyEquivalentAnswer(expectedAnswer, studentAnswer)) {
+      return res.json({
+        correct: true,
+        feedback: 'Your answer is correct. The currency formatting does not matter here.'
+      });
+    }
+
     const prompt = `A student is learning about "${topic}" and working through a practice problem.
 
 Step ${stepNumber}: ${instruction}
-Expected approach/answer: ${expectedAnswer}${hint ? `\nHint to offer if needed: ${hint}` : ''}
+Student-facing answer example: ${expectedAnswer}${hint ? `\nHint to offer if needed: ${hint}` : ''}
 
 The student submitted: "${studentAnswer}"
 
 Evaluate whether this is correct or on the right track. Be encouraging and specific.
+Do not penalize currency formatting differences such as R150 versus 150 when the numeric value is the same.
 If incorrect, point them toward the right approach without giving the full answer.
 Keep your response to 1-2 sentences max.
 
@@ -361,12 +473,31 @@ Respond with ONLY a JSON object (no markdown):
 
     const raw = response.choices[0].message.content.trim();
     const cleaned = raw.replace(/```json|```/g, '').trim();
-    const evaluation = JSON.parse(cleaned);
+
+    let evaluation;
+    try {
+      evaluation = JSON.parse(cleaned);
+    } catch (_) {
+      evaluation = {
+        correct: false,
+        feedback: 'I could not evaluate that response right now. Please try submitting it again.'
+      };
+    }
+
+    if (typeof evaluation?.correct !== 'boolean' || typeof evaluation?.feedback !== 'string') {
+      evaluation = {
+        correct: false,
+        feedback: 'I could not evaluate that response right now. Please try submitting it again.'
+      };
+    }
 
     res.json(evaluation);
   } catch (err) {
     console.error('Evaluate step error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.json({
+      correct: false,
+      feedback: 'I could not evaluate that response right now. Please try submitting it again.'
+    });
   }
 });
 

@@ -111,6 +111,8 @@ let msgCounter = 0;
 let currentController = null;
 let currentProblem = null;
 let currentStepIndex = 0;
+let practiceProblemCounter = 0;
+let lastPracticeProblem = null;
 
 const messagesEl     = document.getElementById('messages');
 const userInput      = document.getElementById('user-input');
@@ -731,13 +733,23 @@ document.getElementById('practice-btn').addEventListener('click', async () => {
     const res = await fetch('/practice-problem', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic: currentTopic, participantID, history: conversationHistory.slice(-6) })
+      body: JSON.stringify({
+        topic: currentTopic,
+        participantID,
+        history: conversationHistory.slice(-6),
+        previousProblem: lastPracticeProblem ? {
+          problem: lastPracticeProblem.problem,
+          steps: lastPracticeProblem.steps
+        } : null
+      })
     });
     const problem = await res.json();
     showTyping(false);
+    problem.__practiceId = `practice-${Date.now()}-${++practiceProblemCounter}`;
     currentProblem = problem;
+    lastPracticeProblem = problem;
     currentStepIndex = 0;
-    appendProblemStep(problem, 0);
+    appendProblemStep(problem, 0, problem.__practiceId);
     logEvent('click', 'Practice Problem');
   } catch (err) {
     showTyping(false);
@@ -969,13 +981,23 @@ function renderTopics() {
         const res = await fetch('/practice-problem', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ topic: topic.name, participantID, history: conversationHistory.slice(-6) })
+          body: JSON.stringify({
+            topic: topic.name,
+            participantID,
+            history: conversationHistory.slice(-6),
+            previousProblem: lastPracticeProblem ? {
+              problem: lastPracticeProblem.problem,
+              steps: lastPracticeProblem.steps
+            } : null
+          })
         });
         const problem = await res.json();
         showTyping(false);
+        problem.__practiceId = `practice-${Date.now()}-${++practiceProblemCounter}`;
         currentProblem = problem;
+        lastPracticeProblem = problem;
         currentStepIndex = 0;
-        appendProblemStep(problem, 0);
+        appendProblemStep(problem, 0, problem.__practiceId);
         logEvent('click', 'Practice Problem');
       } catch (err) {
         showTyping(false);
@@ -1482,10 +1504,10 @@ function appendQuizCard(quiz) {
   userInput.placeholder = 'Type your answer…';
 }
 
-function appendProblemStep(problem, stepIndex) {
+function appendProblemStep(problem, stepIndex, practiceId = problem.__practiceId || `practice-${currentTopic || 'topic'}`) {
   const wrap = document.createElement('div');
   wrap.className = 'message message--bot';
-  wrap.id = `problem-step-${stepIndex}`;
+  wrap.id = `problem-step-${practiceId}-${stepIndex}`;
 
   const card = document.createElement('div');
   card.className = 'problem-card';
@@ -1519,7 +1541,7 @@ function appendProblemStep(problem, stepIndex) {
   input.className = 'problem-card__input';
   input.placeholder = 'Type your answer…';
   input.rows = 2;
-  input.id = `step-input-${stepIndex}`;
+  input.id = `step-input-${practiceId}-${stepIndex}`;
 
   const submitBtn = document.createElement('button');
   submitBtn.className = 'btn-primary btn-sm';
@@ -1527,7 +1549,7 @@ function appendProblemStep(problem, stepIndex) {
   submitBtn.addEventListener('click', async () => {
     const answer = input.value.trim();
     if (!answer) return;
-    submitStepAnswer(problem, stepIndex, answer);
+    submitStepAnswer(problem, stepIndex, answer, practiceId);
   });
 
   inputArea.appendChild(label);
@@ -1545,7 +1567,7 @@ function appendProblemStep(problem, stepIndex) {
   input.focus();
 }
 
-async function submitStepAnswer(problem, stepIndex, answer) {
+async function submitStepAnswer(problem, stepIndex, answer, practiceId = problem.__practiceId || `practice-${currentTopic || 'topic'}`) {
   const step = problem.steps[stepIndex];
   try {
     const res = await fetch('/evaluate-step', {
@@ -1563,9 +1585,16 @@ async function submitStepAnswer(problem, stepIndex, answer) {
     });
     const feedback = await res.json();
 
-    const stepCard = document.getElementById(`problem-step-${stepIndex}`);
+    const stepCard = document.getElementById(`problem-step-${practiceId}-${stepIndex}`);
     const feedbackDiv = document.createElement('div');
     feedbackDiv.className = 'problem-card__feedback';
+
+    if (!stepCard) {
+      return;
+    }
+
+    const existingFeedback = stepCard.querySelectorAll('.problem-card__feedback');
+    existingFeedback.forEach(node => node.remove());
 
     // Include the student's answer in the feedback if incorrect
     if (!feedback.correct) {
@@ -1589,7 +1618,7 @@ async function submitStepAnswer(problem, stepIndex, answer) {
         nextBtn.addEventListener('click', () => {
           // advance global index and render next step
           currentStepIndex = stepIndex + 1;
-          appendProblemStep(problem, stepIndex + 1);
+          appendProblemStep(problem, stepIndex + 1, practiceId);
         });
         stepCard.querySelector('.problem-card').appendChild(nextBtn);
       } else {
@@ -1605,7 +1634,7 @@ async function submitStepAnswer(problem, stepIndex, answer) {
       }
     } else {
       // Incorrect: clear the input and keep it visible so user can retry
-      const inputField = document.getElementById(`step-input-${stepIndex}`);
+      const inputField = document.getElementById(`step-input-${practiceId}-${stepIndex}`);
       if (inputField) {
         inputField.value = '';
         inputField.focus();
@@ -1619,10 +1648,10 @@ async function submitStepAnswer(problem, stepIndex, answer) {
       showAnswerBtn.className = 'btn-ghost btn-sm';
       showAnswerBtn.textContent = 'Show Answer';
       showAnswerBtn.addEventListener('click', () => {
-        // Reveal expected answer and let the user continue with the problem if they want.
+        // Reveal a student-facing answer example and let the user continue with the problem if they want.
         const reveal = document.createElement('div');
         reveal.className = 'problem-card__reveal';
-        reveal.innerHTML = `<strong>Expected:</strong><p>${step.answer}</p>`;
+        reveal.innerHTML = `<strong>Sample answer:</strong><p>${step.answer}</p>`;
         stepCard.querySelector('.problem-card').appendChild(reveal);
         inputArea.style.display = 'none';
         controls.remove();
@@ -1633,7 +1662,7 @@ async function submitStepAnswer(problem, stepIndex, answer) {
           continueBtn.textContent = `Continue to Next Step (${stepIndex + 2}/${problem.steps.length})`;
           continueBtn.addEventListener('click', () => {
             currentStepIndex = stepIndex + 1;
-            appendProblemStep(problem, stepIndex + 1);
+            appendProblemStep(problem, stepIndex + 1, practiceId);
           });
           stepCard.querySelector('.problem-card').appendChild(continueBtn);
         } else {
