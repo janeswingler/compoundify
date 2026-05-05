@@ -1034,7 +1034,7 @@ function appendAddTopicRow() {
   planRow.dataset.action = 'generate-plan';
   planRow.textContent = 'Generate Learning Plan';
   planRow.addEventListener('click', async () => {
-    const subjectValue = String(lastUploadedSubject || '').trim();
+    const subjectValue = await resolveLearningPlanSubject();
     if (!subjectValue) {
       appendBotMessage('Upload a document first, then click Generate Learning Plan.');
       return;
@@ -1090,6 +1090,28 @@ function appendAddTopicRow() {
   addRow.dataset.action = 'add-topic';
   addRow.textContent = 'Add topic';
   topicList.appendChild(addRow);
+}
+
+async function resolveLearningPlanSubject() {
+  const fromMemory = String(lastUploadedSubject || '').trim();
+  if (fromMemory) return fromMemory;
+
+  try {
+    const res = await fetch('/documents');
+    if (!res.ok) return '';
+    const docs = await res.json();
+    if (!Array.isArray(docs) || docs.length === 0) return '';
+
+    const latest = docs[0];
+    const filename = String(latest?.filename || '').trim();
+    if (!filename) return '';
+
+    const subject = filename.replace(/\.[^.]+$/, '').trim();
+    if (subject) lastUploadedSubject = subject;
+    return subject;
+  } catch (_) {
+    return '';
+  }
 }
 
 function selectTopic(topic) {
