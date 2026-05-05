@@ -464,6 +464,20 @@ body:not(.login-page) {
   color: #315d92;
 }
 
+.topic-item--plan {
+  margin-top: 2px;
+  margin-bottom: 6px;
+  border: 1px solid #2f80ed;
+  background: linear-gradient(135deg, #2f80ed, #1e63c9);
+  color: #ffffff;
+}
+
+.topic-item--plan:hover {
+  background: linear-gradient(135deg, #1f6fdc, #1a56b0);
+  border-color: #1f6fdc;
+  color: #ffffff;
+}
+
 .topic-dot {
   width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
   background: #bfd0ea;
