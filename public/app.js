@@ -1,16 +1,19 @@
 const params = new URLSearchParams(window.location.search);
+const urlParticipantID = params.get('participantID');
+const storedParticipantID = localStorage.getItem('participantID');
 
-let participantID = params.get('participantID') || localStorage.getItem('participantID');
+let participantID = urlParticipantID || storedParticipantID;
 if (!participantID) {
   participantID = (crypto.randomUUID && crypto.randomUUID()) || `p_${Date.now()}`;
 }
-localStorage.setItem('participantID', participantID);
+const participantChanged = !!urlParticipantID && urlParticipantID !== storedParticipantID;
+if (urlParticipantID) localStorage.setItem('participantID', participantID);
 
 const systemID = params.get('systemID') || localStorage.getItem('systemID') || '';
 if (systemID) localStorage.setItem('systemID', systemID);
 
 let sessionID = params.get('sessionID') || localStorage.getItem('sessionID');
-if (!sessionID) {
+if (!sessionID || participantChanged) {
   sessionID = (crypto.randomUUID && crypto.randomUUID()) || `s_${Date.now()}`;
 }
 localStorage.setItem('sessionID', sessionID);
@@ -113,7 +116,6 @@ let currentProblem = null;
 let currentStepIndex = 0;
 let practiceProblemCounter = 0;
 let lastPracticeProblem = null;
-let lastUploadedSubject = '';
 
 const messagesEl     = document.getElementById('messages');
 const userInput      = document.getElementById('user-input');
@@ -1028,90 +1030,12 @@ function renderTopics() {
 }
 
 function appendAddTopicRow() {
-  const planRow = document.createElement('button');
-  planRow.type = 'button';
-  planRow.className = 'topic-item topic-item--add topic-item--plan';
-  planRow.dataset.action = 'generate-plan';
-  planRow.textContent = 'Generate Learning Plan';
-  planRow.addEventListener('click', async () => {
-    const subjectValue = await resolveLearningPlanSubject();
-    if (!subjectValue) {
-      appendBotMessage('Upload a document first, then click Generate Learning Plan.');
-      return;
-    }
-
-    if (planRow.dataset.loading === 'true') return;
-    planRow.dataset.loading = 'true';
-    planRow.classList.add('is-loading');
-    planRow.innerHTML = '<span class="btn-dots"><span></span><span></span><span></span></span>';
-
-    try {
-      const res = await fetch('/generate-topics', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subject: subjectValue, participantID })
-      });
-      if (!res.ok) {
-        const errText = await res.text().catch(() => 'Unknown error');
-        console.error('Generate topics failed:', res.status, errText);
-        appendBotMessage('Could not generate a learning plan. Try again later.');
-        return;
-      }
-
-      const data = await res.json().catch(e => {
-        console.error('Failed parsing generate-topics response', e);
-        return null;
-      });
-
-      if (!data || !data.topics || !Array.isArray(data.topics)) {
-        console.error('Invalid topics response', data);
-        appendBotMessage('Received unexpected response from server.');
-        return;
-      }
-
-      topics = data.topics.map((name, i) => ({ id: `t${Date.now()}${i}`, name, status: 'not_started', problemsSolved: 0 }));
-      saveTopics();
-      renderTopics();
-      appendBotMessage(`Learning plan for ${subjectValue} ready. ${topics.length} topics were added to the left panel.`);
-    } catch (err) {
-      console.error('Generate topics error:', err);
-      appendBotMessage('Could not generate a learning plan. Please try again.');
-    } finally {
-      planRow.dataset.loading = 'false';
-      planRow.classList.remove('is-loading');
-      planRow.textContent = 'Generate Learning Plan';
-    }
-  });
-  topicList.appendChild(planRow);
-
   const addRow = document.createElement('button');
   addRow.type = 'button';
   addRow.className = 'topic-item topic-item--add';
   addRow.dataset.action = 'add-topic';
   addRow.textContent = 'Add topic';
   topicList.appendChild(addRow);
-}
-
-async function resolveLearningPlanSubject() {
-  const fromMemory = String(lastUploadedSubject || '').trim();
-  if (fromMemory) return fromMemory;
-
-  try {
-    const res = await fetch('/documents');
-    if (!res.ok) return '';
-    const docs = await res.json();
-    if (!Array.isArray(docs) || docs.length === 0) return '';
-
-    const latest = docs[0];
-    const filename = String(latest?.filename || '').trim();
-    if (!filename) return '';
-
-    const subject = filename.replace(/\.[^.]+$/, '').trim();
-    if (subject) lastUploadedSubject = subject;
-    return subject;
-  } catch (_) {
-    return '';
-  }
 }
 
 function selectTopic(topic) {
@@ -1413,7 +1337,6 @@ function appendUploadPrompt(filename, chunkCount) {
   msg.innerHTML = `Document <strong>${filename}</strong> uploaded.`;
 
   const subject = filename.replace(/\.[^.]+$/, '');
-  lastUploadedSubject = subject;
 
   const btnRow = document.createElement('div');
   btnRow.className = 'upload-card__btns';
@@ -1917,6 +1840,35 @@ function showTyping(show) {
 function scrollChat() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
+
+document.getElementById('upload-doc-btn').addEventListener('click', () => {
+  document.getElementById('file-input').click();
+});
+
+document.getElementById('file-input').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const btn = document.getElementById('upload-doc-btn');
+  btn.classList.add('uploading');
+  btn.title = 'Uploading…';
+  const formData = new FormData();
+  formData.append('document', file);
+  try {
+    const res = await fetch('/upload-document', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (res.ok) {
+      appendUploadPrompt(data.filename, data.chunkCount);
+    } else {
+      alert('Upload failed: ' + data.error);
+    }
+  } catch (err) {
+    alert('Upload failed.');
+  } finally {
+    btn.classList.remove('uploading');
+    btn.title = 'Attach a document (PDF or TXT)';
+    e.target.value = '';
+  }
+});
 
 function logEvent(type, element) {
   fetch('/log-event', {
