@@ -1495,6 +1495,7 @@ function appendUploadPrompt(filename, chunkCount) {
 function appendUserMessage(text) {
   const wrap = document.createElement('div');
   wrap.className = 'message message--user';
+  wrap.id = `msg-u-${++msgCounter}`;
   const bubble = document.createElement('div');
   bubble.className = 'message__bubble';
   // Render any $...$ or \(...\) math in user messages
@@ -1852,9 +1853,8 @@ messagesEl.addEventListener('mouseup', (e) => {
 
   // Fallback for formula clicks where browser selection is collapsed on MathJax output.
   if (sel.isCollapsed && formulaEl) {
-    const bubble = formulaEl.closest('.message__bubble');
-    const wrap = bubble?.closest('.message--bot');
-    if (!bubble || !wrap) { hideSelTooltip(); return; }
+    const wrap = formulaEl.closest('.message--bot, .message--user');
+    if (!wrap) { hideSelTooltip(); return; }
 
     const formulaText = extractFormulaFromMathElement(formulaEl);
     if (!formulaText) { hideSelTooltip(); return; }
@@ -1872,12 +1872,10 @@ messagesEl.addEventListener('mouseup', (e) => {
 
   const range = sel.getRangeAt(0);
   const node = range.commonAncestorContainer;
-  const bubble = (node.nodeType === 3 ? node.parentElement : node).closest('.message__bubble');
-  if (!bubble) { hideSelTooltip(); return; }
-  const wrap = bubble.closest('.message--bot');
+  const wrap = (node.nodeType === 3 ? node.parentElement : node).closest('.message--bot, .message--user');
   if (!wrap) { hideSelTooltip(); return; }
 
-  const formulaNodes = [...bubble.querySelectorAll('mjx-container')].filter((el) => {
+  const formulaNodes = [...wrap.querySelectorAll('mjx-container')].filter((el) => {
     try {
       return range.intersectsNode(el);
     } catch {
@@ -1908,6 +1906,16 @@ selTooltip.addEventListener('click', async () => {
   window.getSelection().removeAllRanges();
   await saveNote(text, isFormula, msgId);
 });
+
+// ── Highlight feature notification banner ────────────────────────────────
+const highlightToast = document.getElementById('highlight-toast');
+const highlightToastClose = document.getElementById('highlight-toast-close');
+if (highlightToast) {
+  highlightToast.classList.add('is-visible');
+  highlightToastClose?.addEventListener('click', () => {
+    highlightToast.classList.remove('is-visible');
+  });
+}
 
 function showTyping(show) {
   typingEl.style.display = show ? 'flex' : 'none';
