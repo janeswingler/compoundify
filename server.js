@@ -497,6 +497,20 @@ Respond with ONLY a JSON object (no markdown):
 
     // Persist a practice attempt record for analysis (best-effort)
     try {
+      function parseDateLike(v) {
+        if (!v) return undefined;
+        const n = Number(v);
+        if (!Number.isNaN(n)) {
+          const d = new Date(n);
+          return isNaN(d.getTime()) ? undefined : d;
+        }
+        const d2 = new Date(v);
+        return isNaN(d2.getTime()) ? undefined : d2;
+      }
+
+      const startedAtDate = parseDateLike(startedAt);
+      const latency = startedAtDate ? (Date.now() - startedAtDate.getTime()) : undefined;
+
       const attempt = new PracticeAttempt({
         participantID,
         systemID: systemID || null,
@@ -510,14 +524,15 @@ Respond with ONLY a JSON object (no markdown):
         studentAnswerRaw: studentAnswer || null,
         isCorrect: !!evaluation?.correct,
         actionType: 'submit',
-        startedAt: startedAt ? new Date(startedAt) : undefined,
+        startedAt: startedAtDate,
         submittedAt: new Date(),
-        latencyMs: startedAt ? (Date.now() - new Date(startedAt).getTime()) : undefined,
+        latencyMs: typeof latency === 'number' && Number.isFinite(latency) ? latency : undefined,
         meta: { hintProvided: !!hint }
       });
       await attempt.save();
     } catch (err) {
       console.error('Failed to save PracticeAttempt:', err?.message || err);
+      try { console.error('PracticeAttempt payload:', JSON.stringify({ participantID, systemID, sessionID, practiceId, topic, problemHash, stepNumber, instruction, expectedAnswer, studentAnswer, startedAt })); } catch(e){}
     }
   } catch (err) {
     console.error('Evaluate step error:', err.message);
@@ -733,6 +748,32 @@ app.post('/history', async (req, res) => {
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Diagnostic telemetry status endpoint (admin/debug)
+app.get('/telemetry-status', async (req, res) => {
+  try {
+    const [evCount, paCount, tpCount, ssCount, intCount, noteCount] = await Promise.all([
+      EventLog.countDocuments(),
+      PracticeAttempt.countDocuments(),
+      TopicPlanEvent.countDocuments(),
+      // StudySession may not exist in this project; guard with try/catch via Model lookup
+      (async () => { try { return (await mongoose.modelNames().includes('StudySession')) ? (await mongoose.model('StudySession').countDocuments()) : 0 } catch { return 0 } })(),
+      Interaction.countDocuments(),
+      Note.countDocuments()
+    ]);
+
+    const latest = {
+      eventLog: await EventLog.findOne().sort({ timestamp: -1 }).lean().exec(),
+      practiceAttempt: await PracticeAttempt.findOne().sort({ createdAt: -1 }).lean().exec(),
+      topicPlanEvent: await TopicPlanEvent.findOne().sort({ timestamp: -1 }).lean().exec()
+    };
+
+    res.json({ counts: { eventlogs: evCount, practiceattempts: paCount, topicplanevents: tpCount, studysessions: ssCount, interactions: intCount, notes: noteCount }, latest });
+  } catch (err) {
+    console.error('telemetry-status error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.listen(PORT, () => {

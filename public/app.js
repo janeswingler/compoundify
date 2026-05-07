@@ -781,9 +781,11 @@ document.getElementById('modal-cancel-btn').addEventListener('click', () => {
 document.getElementById('modal-confirm-btn').addEventListener('click', () => {
     const name = document.getElementById('new-topic-input').value.trim();
   if (!name) return;
-  topics.push({ id: `t${Date.now()}`, name, status: 'not_started', problemsSolved: 0 });
+  const newTopic = { id: `t${Date.now()}`, name, status: 'not_started', problemsSolved: 0 };
+  topics.push(newTopic);
   saveTopics();
   renderTopics();
+  sendTopicEvent('added', newTopic.id, newTopic.name, null, { topic: newTopic });
   document.getElementById('new-topic-input').value = '';
   document.getElementById('add-topic-modal').style.display = 'none';
 });
@@ -940,9 +942,10 @@ function renderTopics() {
     del.innerHTML = TRASH_SVG;
     del.addEventListener('click', (e) => {
       e.stopPropagation();
-      topics.splice(idx, 1);
+      const removed = topics.splice(idx, 1)[0];
       saveTopics();
       renderTopics();
+      try { sendTopicEvent('deleted', removed.id, removed.name, { topic: removed }, null); } catch(e){}
     });
 
     // Top row: bullet + label wrapper + checkbox + delete
@@ -1077,6 +1080,10 @@ function appendAddTopicRow() {
       saveTopics();
       renderTopics();
       appendBotMessage(`Learning plan for ${subjectValue} ready. ${topics.length} topics were added to the left panel.`);
+      try {
+        // send a single generated event with the new plan
+        sendTopicEvent('generated', null, null, null, { topics: topics.map(t => ({ id: t.id, name: t.name })) });
+      } catch (e) {}
     } catch (err) {
       console.error('Generate topics error:', err);
       appendBotMessage('Could not generate a learning plan. Please try again.');
@@ -1160,9 +1167,11 @@ function selectTopic(topic) {
 function updateTopicStatus(id, status) {
   const t = topics.find(t => t.id === id);
   if (t) {
+    const oldStatus = t.status;
     t.status = status;
     saveTopics();
     renderTopics();
+    try { sendTopicEvent('status_changed', t.id, t.name, { status: oldStatus }, { status: t.status }); } catch(e){}
   }
 }
 
@@ -1990,6 +1999,29 @@ function logEvent(type, element) {
       uiVersion: window.__uiVersion || null
     })
   }).catch(() => {});
+}
+
+async function sendTopicEvent(eventName, topicId = null, topicName = null, oldValue = null, newValue = null, meta = null) {
+  try {
+    await fetch('/topic-event', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        participantID,
+        systemID,
+        sessionID,
+        topicId,
+        topicName,
+        eventName,
+        oldValue,
+        newValue,
+        meta
+      })
+    });
+  } catch (e) {
+    // best-effort, do not block UI
+    console.warn('Failed to send topic-event', e);
+  }
 }
 
 sendBtn.addEventListener('click', () => {
