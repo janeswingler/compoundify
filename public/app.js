@@ -876,7 +876,7 @@ function renderTopics() {
   topicList.innerHTML = '';
 
   if (topics.length === 0) {
-    topicList.innerHTML = '<p class="empty-hint">No topics yet.<br>Upload a document or add manually.</p>';
+    topicList.innerHTML = '<p class="empty-hint">No topics yet.<br>Generate a learning plan, or add topics manually.</p>';
     overallBar.style.width = '0%';
     progressSummary.textContent = '0 / 0 topics';
     appendAddTopicRow();
