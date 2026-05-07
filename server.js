@@ -23,6 +23,8 @@ const Interaction = require('./models/Interaction');
 const Note = require('./models/Note');
 const Document = require('./models/Document');
 const EventLog = require('./models/EventLog');
+const PracticeAttempt = require('./models/PracticeAttempt');
+const TopicPlanEvent = require('./models/TopicPlanEvent');
 const retrievalService = require('./services/retrievalService');
 retrievalService.initialize().catch(err => console.error('Failed to initialize retrieval service:', err));
 
@@ -438,7 +440,7 @@ Return ONLY a JSON object with this exact shape (no markdown, no extra text):
 
 app.post('/evaluate-step', async (req, res) => {
   try {
-    const { topic, stepNumber, instruction, expectedAnswer, studentAnswer, hint, participantID } = req.body;
+    const { topic, stepNumber, instruction, expectedAnswer, studentAnswer, hint, participantID, systemID, sessionID, practiceId, problemHash, startedAt } = req.body;
 
     if (isCurrencyEquivalentAnswer(expectedAnswer, studentAnswer)) {
       return res.json({
@@ -492,6 +494,31 @@ Respond with ONLY a JSON object (no markdown):
     }
 
     res.json(evaluation);
+
+    // Persist a practice attempt record for analysis (best-effort)
+    try {
+      const attempt = new PracticeAttempt({
+        participantID,
+        systemID: systemID || null,
+        sessionID: sessionID || null,
+        practiceId: practiceId || null,
+        topic: topic || null,
+        problemHash: problemHash || null,
+        stepIndex: typeof stepNumber === 'number' ? (stepNumber - 1) : null,
+        stepInstruction: instruction || null,
+        expectedAnswer: expectedAnswer || null,
+        studentAnswerRaw: studentAnswer || null,
+        isCorrect: !!evaluation?.correct,
+        actionType: 'submit',
+        startedAt: startedAt ? new Date(startedAt) : undefined,
+        submittedAt: new Date(),
+        latencyMs: startedAt ? (Date.now() - new Date(startedAt).getTime()) : undefined,
+        meta: { hintProvided: !!hint }
+      });
+      await attempt.save();
+    } catch (err) {
+      console.error('Failed to save PracticeAttempt:', err?.message || err);
+    }
   } catch (err) {
     console.error('Evaluate step error:', err.message);
     res.json({
@@ -596,13 +623,97 @@ app.get('/documents', async (req, res) => {
 });
 
 app.post('/log-event', async (req, res) => {
-  const { participantID, systemID, sessionID, eventType, elementName, timestamp } = req.body;
+  const { participantID, systemID, sessionID, eventType, elementName, eventProps, clientTs, page, uiVersion } = req.body;
   try {
-    const event = new EventLog({ participantID, systemID: systemID || null, sessionID: sessionID || null, eventType, elementName, timestamp });
+    const event = new EventLog({
+      participantID,
+      systemID: systemID || null,
+      sessionID: sessionID || null,
+      eventType,
+      elementName,
+      eventProps: eventProps || null,
+      clientTs: clientTs ? new Date(clientTs) : undefined,
+      page: page || null,
+      uiVersion: uiVersion || null
+    });
     await event.save();
     res.status(200).send('ok');
   } catch (err) {
+    console.error('log-event error:', err?.message || err);
     res.status(500).send('Error');
+  }
+});
+
+// Practice event ingestion endpoint (allows richer/batched practice events)
+app.post('/practice-event', async (req, res) => {
+  try {
+    const payload = req.body;
+    // If client sent an explicit attempt, save it directly
+    if (payload && payload.attempt && payload.attempt.participantID) {
+      const a = payload.attempt;
+      const attempt = new PracticeAttempt({
+        participantID: a.participantID,
+        systemID: a.systemID || null,
+        sessionID: a.sessionID || null,
+        practiceId: a.practiceId || null,
+        topic: a.topic || null,
+        problemHash: a.problemHash || null,
+        stepIndex: typeof a.stepIndex === 'number' ? a.stepIndex : null,
+        stepInstruction: a.stepInstruction || null,
+        expectedAnswer: a.expectedAnswer || null,
+        studentAnswerRaw: a.studentAnswerRaw || null,
+        isCorrect: !!a.isCorrect,
+        actionType: a.actionType || 'submit',
+        startedAt: a.startedAt ? new Date(a.startedAt) : undefined,
+        submittedAt: a.submittedAt ? new Date(a.submittedAt) : new Date(),
+        latencyMs: typeof a.latencyMs === 'number' ? a.latencyMs : undefined,
+        meta: a.meta || null
+      });
+      await attempt.save();
+      return res.json({ ok: true });
+    }
+
+    // Otherwise accept an array of attempts
+    if (Array.isArray(payload.attempts)) {
+      await PracticeAttempt.insertMany(payload.attempts.map(a => ({
+        participantID: a.participantID,
+        systemID: a.systemID || null,
+        sessionID: a.sessionID || null,
+        practiceId: a.practiceId || null,
+        topic: a.topic || null,
+        problemHash: a.problemHash || null,
+        stepIndex: typeof a.stepIndex === 'number' ? a.stepIndex : null,
+        stepInstruction: a.stepInstruction || null,
+        expectedAnswer: a.expectedAnswer || null,
+        studentAnswerRaw: a.studentAnswerRaw || null,
+        isCorrect: !!a.isCorrect,
+        actionType: a.actionType || 'submit',
+        startedAt: a.startedAt ? new Date(a.startedAt) : undefined,
+        submittedAt: a.submittedAt ? new Date(a.submittedAt) : new Date(),
+        latencyMs: typeof a.latencyMs === 'number' ? a.latencyMs : undefined,
+        meta: a.meta || null
+      })));
+      return res.json({ ok: true, count: payload.attempts.length });
+    }
+
+    res.status(400).json({ error: 'No attempt payload provided' });
+  } catch (err) {
+    console.error('practice-event error:', err?.message || err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Topic plan events
+app.post('/topic-event', async (req, res) => {
+  try {
+    const { participantID, systemID, sessionID, topicId, topicName, eventName, oldValue, newValue, meta } = req.body;
+    if (!participantID || !eventName) return res.status(400).json({ error: 'Missing fields' });
+    const ev = new TopicPlanEvent({ participantID, systemID: systemID || null, sessionID: sessionID || null, topicId: topicId || null, topicName: topicName || null, eventName, oldValue: oldValue || null, newValue: newValue || null, meta: meta || null });
+    await ev.save();
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('topic-event error:', err?.message || err);
+    res.status(500).json({ error: err.message });
   }
 });
 

@@ -749,6 +749,7 @@ document.getElementById('practice-btn').addEventListener('click', async () => {
     const problem = await res.json();
     showTyping(false);
     problem.__practiceId = `practice-${Date.now()}-${++practiceProblemCounter}`;
+    problem.__problemHash = problem.problem ? problem.problem.slice(0, 200) : null;
     currentProblem = problem;
     lastPracticeProblem = problem;
     currentStepIndex = 0;
@@ -1546,6 +1547,7 @@ function appendProblemStep(problem, stepIndex, practiceId = problem.__practiceId
   input.placeholder = 'Type your answer…';
   input.rows = 2;
   input.id = `step-input-${practiceId}-${stepIndex}`;
+  input.dataset.startedAt = String(Date.now());
 
   const submitBtn = document.createElement('button');
   submitBtn.className = 'btn-primary btn-sm';
@@ -1584,7 +1586,12 @@ async function submitStepAnswer(problem, stepIndex, answer, practiceId = problem
         expectedAnswer: step.answer,
         studentAnswer: answer,
         hint: step.hint || '',
-        participantID
+        participantID,
+        systemID,
+        sessionID,
+        practiceId,
+        problemHash: problem.__problemHash || null,
+        startedAt: document.getElementById(`step-input-${practiceId}-${stepIndex}`)?.dataset.startedAt || null
       })
     });
     const feedback = await res.json();
@@ -1882,7 +1889,17 @@ function logEvent(type, element) {
   fetch('/log-event', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ participantID, systemID, sessionID, eventType: type, elementName: element, timestamp: new Date() })
+    body: JSON.stringify({
+      participantID,
+      systemID,
+      sessionID,
+      eventType: type,
+      elementName: element,
+      eventProps: null,
+      clientTs: new Date(),
+      page: window.location.pathname,
+      uiVersion: window.__uiVersion || null
+    })
   }).catch(() => {});
 }
 
