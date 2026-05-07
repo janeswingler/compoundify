@@ -456,8 +456,9 @@ Student-facing answer example: ${expectedAnswer}${hint ? `\nHint to offer if nee
 
 The student submitted: "${studentAnswer}"
 
-Evaluate whether this is correct or on the right track. Be encouraging and specific.
-Do not penalize currency formatting differences such as R150 versus 150 when the numeric value is the same.
+  Evaluate whether this is correct or on the right track. Be encouraging and specific.
+  Do not penalize currency formatting differences, thousand separators, or the presence/absence of a currency symbol when the numeric value is the same.
+  If the expected answer is written as a sentence, focus on the underlying numeric result rather than the surrounding wording.
 If incorrect, point them toward the right approach without giving the full answer.
 Keep your response to 1-2 sentences max.
 
